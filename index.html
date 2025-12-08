@@ -134,6 +134,13 @@
                     <div id="sales-legend-content" class="space-y-1 text-sm text-black">
                     </div>
                 </div>
+
+                <!-- Rental listings legend -->
+                <div id="rental-legend" class="mt-4 pb-4 hidden border-t border-gray-300 pt-4">
+                    <h3 class="font-medium mb-2 text-black">Rental Listings</h3>
+                    <div id="rental-legend-content" class="space-y-1 text-sm text-black">
+                    </div>
+                </div>
             </div>
 
             <!-- Inline overlays container (shown when 5 or fewer overlays) -->
@@ -335,6 +342,12 @@
             label: 'Sales Listings',
             category: 'Real Estate',
             relatedLayers: []
+        },
+        {
+            id: 'rental-listings',
+            label: 'Rental Listings',
+            category: 'Real Estate',
+            relatedLayers: []
         }
         // Add more overlays here as needed
         // Example:
@@ -350,6 +363,7 @@
     let tractData = null;
     let zipData = null;
     let salesListingsData = null;
+    let rentalListingsData = null;
     let currentDataLayer = null;
     let currentLayerName = null; // Store the layer name separately
 
@@ -359,6 +373,14 @@
         'Chester': { min: 174500, max: 436000 },
         'Lancaster': { min: 249500, max: 624500 },
         'Union': { min: 167000, max: 417500 }
+    };
+
+    // Price ranges by county for rental listings
+    const RENTAL_PRICE_RANGES = {
+        'York': { min: 1500, max: 3775 },
+        'Chester': { min: 900, max: 2225 },
+        'Lancaster': { min: 1250, max: 3175 },
+        'Union': { min: 850, max: 2150 }
     };
 
     // Initial map settings (will be updated to fit county)
@@ -717,11 +739,11 @@
                 }
             });
 
-            // Create color expression: black for within range, red for outside range
+            // Create color expression: orange for within range, grey for outside range
             const circleColorExpression = [
                 'case',
-                ['get', 'withinRange'], '#000000', // Black for within range
-                '#e1e1e1' // Red for outside range
+                ['get', 'withinRange'], '#ffb143', // Orange for within range
+                '#e1e1e1' // Grey for outside range
             ];
 
             // Add layer with circle markers
@@ -739,11 +761,120 @@
                 layout: {
                     visibility: 'none'
                 }
-            });
+            }, firstSymbolId);
 
             console.log('Added sales listings layer with quantile-based colors');
         })
         .catch(error => console.error('Error loading sales listings:', error));
+
+        // Load and combine all rental listings CSV files
+        const rentalListingsFiles = [
+            'rental_listings_Chester.csv',
+            'rental_listings_Lancaster.csv',
+            'rental_listings_Union.csv',
+            'rental_listings_York.csv'
+        ];
+
+        Promise.all(rentalListingsFiles.map(file =>
+            fetch(file)
+                .then(response => response.text())
+                .then(text => parseCSV(text))
+                .catch(error => {
+                    console.error('Error loading', file, ':', error);
+                    return [];
+                })
+        ))
+        .then(dataArrays => {
+            // Combine all CSV data
+            rentalListingsData = dataArrays.flat();
+            console.log('Loaded', rentalListingsData.length, 'rental listings');
+
+            // Get county names without "County" suffix for filtering
+            const countyNames = COUNTIES.map(c => c.name.replace(' County', ''));
+
+            // Convert to GeoJSON, filtering to only include listings in the specified counties
+            const features = rentalListingsData
+                .filter(d => {
+                    // Check coordinates are valid
+                    if (!d.latitude || !d.longitude || isNaN(parseFloat(d.latitude)) || isNaN(parseFloat(d.longitude))) {
+                        return false;
+                    }
+                    // Check if county matches one of our counties
+                    return d.county && countyNames.includes(d.county);
+                })
+                .map(d => {
+                    // Determine if price is within range for this county
+                    let withinRange = false;
+                    if (d.price && d.price !== 'NA' && d.county) {
+                        const price = parseFloat(d.price);
+                        const range = RENTAL_PRICE_RANGES[d.county];
+                        if (!isNaN(price) && range) {
+                            withinRange = price >= range.min && price <= range.max;
+                        }
+                    }
+
+                    return {
+                        type: 'Feature',
+                        geometry: {
+                            type: 'Point',
+                            coordinates: [parseFloat(d.longitude), parseFloat(d.latitude)]
+                        },
+                        properties: {
+                            address: d.formattedAddress || d.addressLine1,
+                            price: d.price,
+                            propertyType: d.propertyType,
+                            bedrooms: d.bedrooms,
+                            bathrooms: d.bathrooms,
+                            squareFootage: d.squareFootage,
+                            status: d.status,
+                            county: d.county,
+                            listedDate: d.listedDate,
+                            withinRange: withinRange
+                        }
+                    };
+                });
+
+            console.log('Created', features.length, 'rental listing features');
+
+            // Update the legend
+            updateRentalListingsLegend();
+
+            // Add source
+            map.addSource('rental-listings-source', {
+                type: 'geojson',
+                data: {
+                    type: 'FeatureCollection',
+                    features: features
+                }
+            });
+
+            // Create color expression: orange for within range, grey for outside range
+            const circleColorExpression = [
+                'case',
+                ['get', 'withinRange'], '#ffb143', // Orange for within range
+                '#e1e1e1' // Grey for outside range
+            ];
+
+            // Add layer with circle markers
+            map.addLayer({
+                id: 'rental-listings',
+                type: 'circle',
+                source: 'rental-listings-source',
+                paint: {
+                    'circle-radius': 5,
+                    'circle-color': circleColorExpression,
+                    'circle-stroke-width': 1,
+                    'circle-stroke-color': '#ffffff',
+                    'circle-opacity': 0.8
+                },
+                layout: {
+                    visibility: 'none'
+                }
+            }, firstSymbolId);
+
+            console.log('Added rental listings layer with range-based colors');
+        })
+        .catch(error => console.error('Error loading rental listings:', error));
 
         // Initialize overlay UI based on count
         initializeOverlays();
@@ -904,6 +1035,18 @@
                             salesLegend.classList.remove('hidden');
                         } else {
                             salesLegend.classList.add('hidden');
+                        }
+                    }
+                }
+
+                // Show/hide rental listings legend when rental listings layer is toggled
+                if (layerId === 'rental-listings') {
+                    const rentalLegend = document.getElementById('rental-legend');
+                    if (rentalLegend) {
+                        if (isChecked) {
+                            rentalLegend.classList.remove('hidden');
+                        } else {
+                            rentalLegend.classList.add('hidden');
                         }
                     }
                 }
@@ -1366,20 +1509,20 @@
         const legendContent = document.getElementById('sales-legend-content');
         legendContent.innerHTML = '';
 
-        // Black - within range
+        // Orange - within range
         const withinRangeDiv = document.createElement('div');
         withinRangeDiv.className = 'flex items-center gap-2 mb-2';
 
-        const blackBox = document.createElement('div');
-        blackBox.className = 'w-4 h-4 rounded-full border border-gray-300 flex-shrink-0';
-        blackBox.style.backgroundColor = '#000000';
+        const orangeBox = document.createElement('div');
+        orangeBox.className = 'w-4 h-4 rounded-full border border-gray-300 flex-shrink-0';
+        orangeBox.style.backgroundColor = '#ffb143';
 
-        const blackLabel = document.createElement('span');
-        blackLabel.className = 'text-xs';
-        blackLabel.textContent = 'Within price range';
+        const orangeLabel = document.createElement('span');
+        orangeLabel.className = 'text-xs';
+        orangeLabel.textContent = 'Within price range';
 
-        withinRangeDiv.appendChild(blackBox);
-        withinRangeDiv.appendChild(blackLabel);
+        withinRangeDiv.appendChild(orangeBox);
+        withinRangeDiv.appendChild(orangeLabel);
         legendContent.appendChild(withinRangeDiv);
 
         // Red - outside range
@@ -1413,6 +1556,58 @@
         });
     }
 
+    // Update rental listings legend
+    function updateRentalListingsLegend() {
+        const legendContent = document.getElementById('rental-legend-content');
+        legendContent.innerHTML = '';
+
+        // Orange - within range
+        const withinRangeDiv = document.createElement('div');
+        withinRangeDiv.className = 'flex items-center gap-2 mb-2';
+
+        const orangeBox = document.createElement('div');
+        orangeBox.className = 'w-4 h-4 rounded-full border border-gray-300 flex-shrink-0';
+        orangeBox.style.backgroundColor = '#ffb143';
+
+        const orangeLabel = document.createElement('span');
+        orangeLabel.className = 'text-xs';
+        orangeLabel.textContent = 'Within price range';
+
+        withinRangeDiv.appendChild(orangeBox);
+        withinRangeDiv.appendChild(orangeLabel);
+        legendContent.appendChild(withinRangeDiv);
+
+        // Light grey - outside range
+        const outsideRangeDiv = document.createElement('div');
+        outsideRangeDiv.className = 'flex items-center gap-2 mb-3';
+
+        const greyBox = document.createElement('div');
+        greyBox.className = 'w-4 h-4 rounded-full border border-gray-300 flex-shrink-0';
+        greyBox.style.backgroundColor = '#e1e1e1';
+
+        const greyLabel = document.createElement('span');
+        greyLabel.className = 'text-xs';
+        greyLabel.textContent = 'Outside price range';
+
+        outsideRangeDiv.appendChild(greyBox);
+        outsideRangeDiv.appendChild(greyLabel);
+        legendContent.appendChild(outsideRangeDiv);
+
+        // Add price ranges by county
+        const rangesTitle = document.createElement('div');
+        rangesTitle.className = 'text-xs font-semibold text-gray-700 mb-1 mt-2';
+        rangesTitle.textContent = 'Price ranges by county:';
+        legendContent.appendChild(rangesTitle);
+
+        Object.keys(RENTAL_PRICE_RANGES).forEach(county => {
+            const range = RENTAL_PRICE_RANGES[county];
+            const rangeDiv = document.createElement('div');
+            rangeDiv.className = 'text-xs text-gray-600 ml-2';
+            rangeDiv.textContent = `${county}: $${range.min.toLocaleString()} - $${range.max.toLocaleString()}`;
+            legendContent.appendChild(rangeDiv);
+        });
+    }
+
     function toggleBasemapSettings() {
         const panel = document.getElementById('basemap-settings');
         const arrow = document.getElementById('basemap-arrow');
@@ -1427,7 +1622,7 @@
         const savedLayerState = currentDataLayer;
 
         // Capture visible overlay states before switching
-        const overlayLayers = ['municipalities-outline', 'sales-listings'];
+        const overlayLayers = ['municipalities-outline', 'sales-listings', 'rental-listings'];
         const visibleOverlays = overlayLayers.filter(id => {
             const layer = map.getLayer(id);
             return layer && map.getLayoutProperty(id, 'visibility') === 'visible';
@@ -1639,11 +1834,11 @@
                     }
                 });
 
-                // Create color expression: black for within range, red for outside range
+                // Create color expression: orange for within range, grey for outside range
                 const circleColorExpression = [
                     'case',
-                    ['get', 'withinRange'], '#000000', // Black for within range
-                    '#e1e1e1' // Red for outside range
+                    ['get', 'withinRange'], '#ffb143', // Orange for within range
+                    '#e1e1e1' // Grey for outside range
                 ];
 
                 map.addLayer({
@@ -1660,9 +1855,89 @@
                     layout: {
                         visibility: 'none'
                     }
+                }, firstSymbolId);
+
+                console.log('Re-added sales listings layer with range-based colors');
+            }
+
+            // Re-add rental listings layer if data is available
+            if (rentalListingsData) {
+                // Get county names without "County" suffix for filtering
+                const countyNames = COUNTIES.map(c => c.name.replace(' County', ''));
+
+                const features = rentalListingsData
+                    .filter(d => {
+                        // Check coordinates are valid
+                        if (!d.latitude || !d.longitude || isNaN(parseFloat(d.latitude)) || isNaN(parseFloat(d.longitude))) {
+                            return false;
+                        }
+                        // Check if county matches one of our counties
+                        return d.county && countyNames.includes(d.county);
+                    })
+                    .map(d => {
+                        // Determine if price is within range for this county
+                        let withinRange = false;
+                        if (d.price && d.price !== 'NA' && d.county) {
+                            const price = parseFloat(d.price);
+                            const range = RENTAL_PRICE_RANGES[d.county];
+                            if (!isNaN(price) && range) {
+                                withinRange = price >= range.min && price <= range.max;
+                            }
+                        }
+
+                        return {
+                            type: 'Feature',
+                            geometry: {
+                                type: 'Point',
+                                coordinates: [parseFloat(d.longitude), parseFloat(d.latitude)]
+                            },
+                            properties: {
+                                address: d.formattedAddress || d.addressLine1,
+                                price: d.price,
+                                propertyType: d.propertyType,
+                                bedrooms: d.bedrooms,
+                                bathrooms: d.bathrooms,
+                                squareFootage: d.squareFootage,
+                                status: d.status,
+                                county: d.county,
+                                listedDate: d.listedDate,
+                                withinRange: withinRange
+                            }
+                        };
+                    });
+
+                map.addSource('rental-listings-source', {
+                    type: 'geojson',
+                    data: {
+                        type: 'FeatureCollection',
+                        features: features
+                    }
                 });
 
-                console.log('Re-added sales listings layer with quantile-based colors');
+                // Create color expression: orange for within range, grey for outside range
+                const circleColorExpression = [
+                    'case',
+                    ['get', 'withinRange'], '#ffb143', // Orange for within range
+                    '#e1e1e1' // Grey for outside range
+                ];
+
+                map.addLayer({
+                    id: 'rental-listings',
+                    type: 'circle',
+                    source: 'rental-listings-source',
+                    paint: {
+                        'circle-radius': 5,
+                        'circle-color': circleColorExpression,
+                        'circle-stroke-width': 1,
+                        'circle-stroke-color': '#ffffff',
+                        'circle-opacity': 0.8
+                    },
+                    layout: {
+                        visibility: 'none'
+                    }
+                }, firstSymbolId);
+
+                console.log('Re-added rental listings layer with range-based colors');
             }
 
             // Re-initialize overlay UI
@@ -1685,6 +1960,14 @@
                         const salesLegend = document.getElementById('sales-legend');
                         if (salesLegend) {
                             salesLegend.classList.remove('hidden');
+                        }
+                    }
+
+                    // Show rental listings legend if rental listings layer is visible
+                    if (id === 'rental-listings') {
+                        const rentalLegend = document.getElementById('rental-legend');
+                        if (rentalLegend) {
+                            rentalLegend.classList.remove('hidden');
                         }
                     }
                 }
@@ -1952,7 +2235,7 @@
         }
 
         const withinRangeText = props.withinRange ?
-            '<p style="color: #000000;"><strong>✓ Sales affordable to workforce</strong></p>' :
+            '<p style="color: #ffb143;"><strong>✓ Sales affordable to workforce</strong></p>' :
             '<p style="color: #000000;"><strong>✗ Sales outside of workforce affordability range</strong></p>';
 
         new mapboxgl.Popup()
@@ -1960,6 +2243,49 @@
             .setHTML(`
                 <div class="popup-content">
                     <div class="popup-header">Sales Listing</div>
+                    ${withinRangeText}
+                    <p><strong>Address:</strong> ${props.address || 'N/A'}</p>
+                    <p><strong>Price:</strong> ${priceFormatted}</p>
+                    <p><strong>Listed:</strong> ${listedDateText}</p>
+                    <p><strong>Type:</strong> ${props.propertyType || 'N/A'}</p>
+                    <p><strong>Bedrooms:</strong> ${bedroomsText}</p>
+                    <p><strong>Bathrooms:</strong> ${bathroomsText}</p>
+                    <p><strong>Size:</strong> ${sqftText}</p>
+                </div>
+            `)
+            .addTo(map);
+    });
+
+    // Add click handler for rental listings
+    map.on('click', 'rental-listings', function(e) {
+        const props = e.features[0].properties;
+        const priceFormatted = props.price && props.price !== 'NA' ? '$' + parseInt(props.price).toLocaleString() : 'N/A';
+        const bedroomsText = props.bedrooms && props.bedrooms !== 'NA' ? props.bedrooms : 'N/A';
+        const bathroomsText = props.bathrooms && props.bathrooms !== 'NA' ? props.bathrooms : 'N/A';
+        const sqftText = props.squareFootage && props.squareFootage !== 'NA' ? parseInt(props.squareFootage).toLocaleString() + ' sq ft' : 'N/A';
+
+        // Format listed date
+        let listedDateText = 'N/A';
+        if (props.listedDate && props.listedDate !== 'NA') {
+            try {
+                const date = new Date(props.listedDate);
+                if (!isNaN(date.getTime())) {
+                    listedDateText = date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+                }
+            } catch (e) {
+                listedDateText = 'N/A';
+            }
+        }
+
+        const withinRangeText = props.withinRange ?
+            '<p style="color: #ffb143;"><strong>✓ Rentals affordable to workforce</strong></p>' :
+            '<p style="color: #000000;"><strong>✗ Rentals outside of workforce affordability range</strong></p>';
+
+        new mapboxgl.Popup()
+            .setLngLat(e.lngLat)
+            .setHTML(`
+                <div class="popup-content">
+                    <div class="popup-header">Rental Listing</div>
                     ${withinRangeText}
                     <p><strong>Address:</strong> ${props.address || 'N/A'}</p>
                     <p><strong>Price:</strong> ${priceFormatted}</p>
@@ -2021,6 +2347,14 @@
     });
 
     map.on('mouseleave', 'sales-listings', function() {
+        map.getCanvas().style.cursor = '';
+    });
+
+    map.on('mouseenter', 'rental-listings', function() {
+        map.getCanvas().style.cursor = 'pointer';
+    });
+
+    map.on('mouseleave', 'rental-listings', function() {
         map.getCanvas().style.cursor = '';
     });
 </script>
