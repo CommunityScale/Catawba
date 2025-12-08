@@ -322,6 +322,12 @@
             label: 'Municipalities',
             category: 'Boundaries',
             relatedLayers: [] // Layers that should toggle together
+        },
+        {
+            id: 'sales-listings',
+            label: 'Sales Listings',
+            category: 'Real Estate',
+            relatedLayers: []
         }
         // Add more overlays here as needed
         // Example:
@@ -336,11 +342,47 @@
     // Data storage
     let tractData = null;
     let zipData = null;
+    let salesListingsData = null;
+    let salesListingsQuantileBreaks = null; // Store quantile breaks for price per sqft
     let currentDataLayer = null;
     let currentLayerName = null; // Store the layer name separately
 
     // Initial map settings (will be updated to fit county)
     let currentBasemap = 'gray';
+
+    // CSV parsing function
+    function parseCSV(text) {
+        const lines = text.trim().split('\n');
+        const headers = lines[0].split(',').map(h => h.replace(/^"|"$/g, ''));
+        const data = [];
+
+        for (let i = 1; i < lines.length; i++) {
+            const values = [];
+            let current = '';
+            let inQuotes = false;
+
+            for (let j = 0; j < lines[i].length; j++) {
+                const char = lines[i][j];
+                if (char === '"') {
+                    inQuotes = !inQuotes;
+                } else if (char === ',' && !inQuotes) {
+                    values.push(current.trim());
+                    current = '';
+                } else {
+                    current += char;
+                }
+            }
+            values.push(current.trim());
+
+            const row = {};
+            headers.forEach((header, index) => {
+                row[header] = values[index];
+            });
+            data.push(row);
+        }
+
+        return data;
+    }
 
     // Store initial county bounds for reset button
     let initialCountyBounds = null;
@@ -579,6 +621,148 @@
         }, firstSymbolId);
 
         console.log('Added municipalities overlay layer');
+
+        // Load and combine all sales listings CSV files
+        const salesListingsFiles = [
+            'sales_listings_Chester.csv',
+            'sales_listings_Lancaster.csv',
+            'sales_listings_Union.csv',
+            'sales_listings_York.csv'
+        ];
+
+        Promise.all(salesListingsFiles.map(file =>
+            fetch(file)
+                .then(response => response.text())
+                .then(text => parseCSV(text))
+                .catch(error => {
+                    console.error('Error loading', file, ':', error);
+                    return [];
+                })
+        ))
+        .then(dataArrays => {
+            // Combine all CSV data
+            salesListingsData = dataArrays.flat();
+            console.log('Loaded', salesListingsData.length, 'sales listings');
+
+            // Get county names without "County" suffix for filtering
+            const countyNames = COUNTIES.map(c => c.name.replace(' County', ''));
+
+            // Convert to GeoJSON, filtering to only include listings in the specified counties
+            const features = salesListingsData
+                .filter(d => {
+                    // Check coordinates are valid
+                    if (!d.latitude || !d.longitude || isNaN(parseFloat(d.latitude)) || isNaN(parseFloat(d.longitude))) {
+                        return false;
+                    }
+                    // Check if county matches one of our counties
+                    return d.county && countyNames.includes(d.county);
+                })
+                .map(d => {
+                    // Calculate price per square foot
+                    let pricePerSqft = null;
+                    if (d.price && d.squareFootage && d.price !== 'NA' && d.squareFootage !== 'NA') {
+                        const price = parseFloat(d.price);
+                        const sqft = parseFloat(d.squareFootage);
+                        if (!isNaN(price) && !isNaN(sqft) && sqft > 0) {
+                            pricePerSqft = price / sqft;
+                        }
+                    }
+
+                    return {
+                        type: 'Feature',
+                        geometry: {
+                            type: 'Point',
+                            coordinates: [parseFloat(d.longitude), parseFloat(d.latitude)]
+                        },
+                        properties: {
+                            address: d.formattedAddress || d.addressLine1,
+                            price: d.price,
+                            propertyType: d.propertyType,
+                            bedrooms: d.bedrooms,
+                            bathrooms: d.bathrooms,
+                            squareFootage: d.squareFootage,
+                            status: d.status,
+                            county: d.county,
+                            pricePerSqft: pricePerSqft
+                        }
+                    };
+                });
+
+            console.log('Created', features.length, 'sales listing features');
+
+            // Calculate quantile breaks for price per square foot
+            const pricesPerSqft = features
+                .map(f => f.properties.pricePerSqft)
+                .filter(v => v !== null && !isNaN(v))
+                .sort((a, b) => a - b);
+
+            console.log('Valid price per sqft values:', pricesPerSqft.length);
+
+            salesListingsQuantileBreaks = [];
+            if (pricesPerSqft.length > 0) {
+                const numQuantiles = 4;
+                for (let i = 0; i <= numQuantiles; i++) {
+                    const position = (i / numQuantiles) * (pricesPerSqft.length - 1);
+                    const lower = Math.floor(position);
+                    const upper = Math.ceil(position);
+                    const weight = position - lower;
+                    salesListingsQuantileBreaks.push(pricesPerSqft[lower] * (1 - weight) + pricesPerSqft[upper] * weight);
+                }
+                console.log('Price per sqft quantile breaks:', salesListingsQuantileBreaks);
+            }
+
+            // Add source
+            map.addSource('sales-listings-source', {
+                type: 'geojson',
+                data: {
+                    type: 'FeatureCollection',
+                    features: features
+                }
+            });
+
+            // Create color expression based on quantile breaks
+            // Colors from lightest (lowest price/sqft) to darkest (highest price/sqft)
+            const colorPalette = ['#d3d85d', '#89aa42', '#667b39', '#425121'];
+            let circleColorExpression;
+
+            if (salesListingsQuantileBreaks.length >= 5) {
+                circleColorExpression = [
+                    'case',
+                    ['==', ['get', 'pricePerSqft'], null], '#999999', // Grey for null values
+                    ['<', ['get', 'pricePerSqft'], salesListingsQuantileBreaks[1]], colorPalette[0], // Lowest quartile
+                    ['<', ['get', 'pricePerSqft'], salesListingsQuantileBreaks[2]], colorPalette[1], // Second quartile
+                    ['<', ['get', 'pricePerSqft'], salesListingsQuantileBreaks[3]], colorPalette[2], // Third quartile
+                    colorPalette[3] // Highest quartile
+                ];
+            } else {
+                // Fallback if not enough data
+                circleColorExpression = [
+                    'case',
+                    ['==', ['get', 'pricePerSqft'], null], '#999999',
+                    '#89aa42' // Default middle color
+                ];
+            }
+
+            // Add layer with circle markers
+            map.addLayer({
+                id: 'sales-listings',
+                type: 'circle',
+                source: 'sales-listings-source',
+                paint: {
+                    'circle-radius': 5,
+                    'circle-color': circleColorExpression,
+                    'circle-stroke-width': 1,
+                    'circle-stroke-color': '#ffffff',
+                    'circle-opacity': 0.8
+                },
+                layout: {
+                    visibility: 'none'
+                }
+            });
+
+            console.log('Added sales listings layer with quantile-based colors');
+        })
+        .catch(error => console.error('Error loading sales listings:', error));
 
         // Initialize overlay UI based on count
         initializeOverlays();
@@ -1198,7 +1382,7 @@
         const savedLayerState = currentDataLayer;
 
         // Capture visible overlay states before switching
-        const overlayLayers = ['municipalities-outline'];
+        const overlayLayers = ['municipalities-outline', 'sales-listings'];
         const visibleOverlays = overlayLayers.filter(id => {
             const layer = map.getLayer(id);
             return layer && map.getLayoutProperty(id, 'visibility') === 'visible';
@@ -1354,7 +1538,100 @@
                 filter: ['in', ['get', 'COUNTY_NAM'], ['literal', COUNTIES.map(c => c.name.replace(' County', '').toUpperCase())]]
             }, firstSymbolId);
 
-            console.log('Re-added overlay layer');
+            console.log('Re-added municipalities overlay layer');
+
+            // Re-add sales listings layer if data is available
+            if (salesListingsData) {
+                // Get county names without "County" suffix for filtering
+                const countyNames = COUNTIES.map(c => c.name.replace(' County', ''));
+
+                const features = salesListingsData
+                    .filter(d => {
+                        // Check coordinates are valid
+                        if (!d.latitude || !d.longitude || isNaN(parseFloat(d.latitude)) || isNaN(parseFloat(d.longitude))) {
+                            return false;
+                        }
+                        // Check if county matches one of our counties
+                        return d.county && countyNames.includes(d.county);
+                    })
+                    .map(d => {
+                        // Calculate price per square foot
+                        let pricePerSqft = null;
+                        if (d.price && d.squareFootage && d.price !== 'NA' && d.squareFootage !== 'NA') {
+                            const price = parseFloat(d.price);
+                            const sqft = parseFloat(d.squareFootage);
+                            if (!isNaN(price) && !isNaN(sqft) && sqft > 0) {
+                                pricePerSqft = price / sqft;
+                            }
+                        }
+
+                        return {
+                            type: 'Feature',
+                            geometry: {
+                                type: 'Point',
+                                coordinates: [parseFloat(d.longitude), parseFloat(d.latitude)]
+                            },
+                            properties: {
+                                address: d.formattedAddress || d.addressLine1,
+                                price: d.price,
+                                propertyType: d.propertyType,
+                                bedrooms: d.bedrooms,
+                                bathrooms: d.bathrooms,
+                                squareFootage: d.squareFootage,
+                                status: d.status,
+                                county: d.county,
+                                pricePerSqft: pricePerSqft
+                            }
+                        };
+                    });
+
+                map.addSource('sales-listings-source', {
+                    type: 'geojson',
+                    data: {
+                        type: 'FeatureCollection',
+                        features: features
+                    }
+                });
+
+                // Create color expression using stored quantile breaks
+                const colorPalette = ['#d3d85d', '#89aa42', '#667b39', '#425121'];
+                let circleColorExpression;
+
+                if (salesListingsQuantileBreaks && salesListingsQuantileBreaks.length >= 5) {
+                    circleColorExpression = [
+                        'case',
+                        ['==', ['get', 'pricePerSqft'], null], '#999999',
+                        ['<', ['get', 'pricePerSqft'], salesListingsQuantileBreaks[1]], colorPalette[0],
+                        ['<', ['get', 'pricePerSqft'], salesListingsQuantileBreaks[2]], colorPalette[1],
+                        ['<', ['get', 'pricePerSqft'], salesListingsQuantileBreaks[3]], colorPalette[2],
+                        colorPalette[3]
+                    ];
+                } else {
+                    circleColorExpression = [
+                        'case',
+                        ['==', ['get', 'pricePerSqft'], null], '#999999',
+                        '#89aa42'
+                    ];
+                }
+
+                map.addLayer({
+                    id: 'sales-listings',
+                    type: 'circle',
+                    source: 'sales-listings-source',
+                    paint: {
+                        'circle-radius': 5,
+                        'circle-color': circleColorExpression,
+                        'circle-stroke-width': 1,
+                        'circle-stroke-color': '#ffffff',
+                        'circle-opacity': 0.8
+                    },
+                    layout: {
+                        visibility: 'none'
+                    }
+                });
+
+                console.log('Re-added sales listings layer with quantile-based colors');
+            }
 
             // Re-initialize overlay UI
             initializeOverlays();
@@ -1613,6 +1890,33 @@
             .addTo(map);
     });
 
+    // Add click handler for sales listings
+    map.on('click', 'sales-listings', function(e) {
+        const props = e.features[0].properties;
+        const priceFormatted = props.price && props.price !== 'NA' ? '$' + parseInt(props.price).toLocaleString() : 'N/A';
+        const bedroomsText = props.bedrooms && props.bedrooms !== 'NA' ? props.bedrooms : 'N/A';
+        const bathroomsText = props.bathrooms && props.bathrooms !== 'NA' ? props.bathrooms : 'N/A';
+        const sqftText = props.squareFootage && props.squareFootage !== 'NA' ? parseInt(props.squareFootage).toLocaleString() + ' sq ft' : 'N/A';
+        const pricePerSqftText = props.pricePerSqft ? '$' + props.pricePerSqft.toFixed(2) + '/sq ft' : 'N/A';
+
+        new mapboxgl.Popup()
+            .setLngLat(e.lngLat)
+            .setHTML(`
+                <div class="popup-content">
+                    <div class="popup-header">Sales Listing</div>
+                    <p><strong>Address:</strong> ${props.address || 'N/A'}</p>
+                    <p><strong>Price:</strong> ${priceFormatted}</p>
+                    <p><strong>Price/sq ft:</strong> ${pricePerSqftText}</p>
+                    <p><strong>Type:</strong> ${props.propertyType || 'N/A'}</p>
+                    <p><strong>Bedrooms:</strong> ${bedroomsText}</p>
+                    <p><strong>Bathrooms:</strong> ${bathroomsText}</p>
+                    <p><strong>Size:</strong> ${sqftText}</p>
+                    <p><strong>Status:</strong> ${props.status || 'N/A'}</p>
+                </div>
+            `)
+            .addTo(map);
+    });
+
     // Zip code handlers removed (layer commented out)
 
     // Change cursor on hover
@@ -1653,6 +1957,14 @@
     });
 
     map.on('mouseleave', 'counties-outline', function() {
+        map.getCanvas().style.cursor = '';
+    });
+
+    map.on('mouseenter', 'sales-listings', function() {
+        map.getCanvas().style.cursor = 'pointer';
+    });
+
+    map.on('mouseleave', 'sales-listings', function() {
         map.getCanvas().style.cursor = '';
     });
 </script>
