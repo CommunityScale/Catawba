@@ -413,6 +413,12 @@
     // Overlay configuration - add or remove overlays here
     const OVERLAYS = [
         {
+            id: 'counties-outline',
+            label: 'Counties',
+            category: 'Boundaries',
+            relatedLayers: [] // Layers that should toggle together
+        },
+        {
             id: 'municipalities-outline',
             label: 'Municipalities',
             category: 'Boundaries',
@@ -671,7 +677,10 @@
             'source-layer': 'states',
             paint: {
                 'line-color': '#1f2937',
-                'line-width': 3
+                'line-width': 1
+            },
+            layout: {
+                visibility: 'visible'
             },
             filter: ['in', ['get', 'GEOID'], ['literal', COUNTIES.map(c => c.geoid)]]
         }, firstSymbolId);
@@ -1169,8 +1178,8 @@
                     type: 'geojson',
                     data: data,
                     cluster: true,
-                    clusterMaxZoom: 14, // Max zoom to cluster points on
-                    clusterRadius: 50, // Radius of each cluster when clustering points
+                    clusterMaxZoom: 17, // Max zoom to cluster points on
+                    clusterRadius: 80, // Radius of each cluster when clustering points
                     clusterProperties: {
                         // Sum of c000 values for all points in cluster
                         'sum_c000': ['+', ['get', 'c000']]
@@ -1372,10 +1381,15 @@
 
     // Create HTML for overlay toggle
     function createOverlayToggle(overlay) {
+        // Check if the layer is currently visible
+        const isVisible = map.getLayer(overlay.id) &&
+                         map.getLayoutProperty(overlay.id, 'visibility') === 'visible';
+        const checkedAttr = isVisible ? 'checked' : '';
+
         return `
             <label class="flex items-center gap-2 text-sm text-gray-700 mb-2 cursor-pointer">
                 <div class="relative">
-                    <input type="checkbox" class="sr-only overlay-toggle peer" value="${overlay.id}" />
+                    <input type="checkbox" class="sr-only overlay-toggle peer" value="${overlay.id}" ${checkedAttr} />
                     <div class="w-6 h-3.5 bg-gray-300 rounded-full peer-checked:bg-gray-600 transition-colors"></div>
                     <div class="absolute top-[2px] left-[2px] w-2.5 h-2.5 bg-white border border-gray-400 rounded-full transition-transform peer-checked:translate-x-[10px]"></div>
                 </div>
@@ -2684,8 +2698,8 @@
                         type: 'geojson',
                         data: data,
                         cluster: true,
-                        clusterMaxZoom: 14,
-                        clusterRadius: 50,
+                        clusterMaxZoom: 17,
+                        clusterRadius: 80,
                         clusterProperties: {
                             // Sum of c000 values for all points in cluster
                             'sum_c000': ['+', ['get', 'c000']]
