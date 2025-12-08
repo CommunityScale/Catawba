@@ -274,10 +274,26 @@
 
     // Counties of interest - change this to analyze different counties
     const COUNTIES = [
-        { name: 'Lancaster County', geoid: '45057' },
-        { name: 'York County', geoid: '45091' },
-        { name: 'Chester County', geoid: '45023' },
-        { name: 'Union County', geoid: '45087' }
+        {
+            name: 'Lancaster County',
+            geoid: '45057',
+            bounds: [[-81.1, 34.4], [-80.4, 35.0]] // [southwest, northeast]
+        },
+        {
+            name: 'York County',
+            geoid: '45091',
+            bounds: [[-81.5, 34.7], [-80.8, 35.2]]
+        },
+        {
+            name: 'Chester County',
+            geoid: '45023',
+            bounds: [[-81.4, 34.5], [-80.8, 34.9]]
+        },
+        {
+            name: 'Union County',
+            geoid: '45087',
+            bounds: [[-81.8, 34.6], [-81.4, 35.0]]
+        }
     ];
     const REGION_NAME = 'Catawba Region';  // Optional: custom name for the region
     const STATE_NAME = 'South Carolina';
@@ -443,6 +459,7 @@
     let currentLayerName = null; // Store the layer name separately
     let selectedSubmarkets = new Set();
     let submarketData = null;
+    let countyData = null;
 
     // Price ranges by county for sales listings
     const COUNTY_PRICE_RANGES = {
@@ -846,11 +863,58 @@
             .then(data => {
                 submarketData = data;
 
-                // Extract unique submarket names and sort
+                // Extract unique submarket names
                 const submarketNames = [...new Set(data.features.map(f => f.properties.SubgeoName))].sort();
 
-                // Populate dropdown with submarkets
+                // Add county entries with "county:" prefix for internal use
+                const countyEntries = COUNTIES.map(c => ({
+                    value: 'county:' + c.name.replace(' County', ''),
+                    displayName: c.name.replace(' County', '') + ' County',
+                    name: c.name.replace(' County', '')
+                })).sort((a, b) => a.displayName.localeCompare(b.displayName));
+
+                // Populate dropdown with counties first, then submarkets
                 const optionsContainer = document.getElementById('submarket-options');
+
+                // Add COUNTIES section
+                const countiesHeader = document.createElement('div');
+                countiesHeader.className = 'text-xs font-semibold text-gray-600 uppercase tracking-wide mt-2 mb-1 px-2';
+                countiesHeader.textContent = 'COUNTIES';
+                optionsContainer.appendChild(countiesHeader);
+
+                countyEntries.forEach(entry => {
+                    const label = document.createElement('label');
+                    label.className = 'flex items-center gap-2 py-1 px-2 hover:bg-gray-100 cursor-pointer';
+
+                    const checkbox = document.createElement('input');
+                    checkbox.type = 'checkbox';
+                    checkbox.value = entry.value;
+                    checkbox.className = 'rounded border-gray-300';
+
+                    const span = document.createElement('span');
+                    span.textContent = entry.displayName;
+                    span.className = 'text-sm';
+
+                    label.appendChild(checkbox);
+                    label.appendChild(span);
+                    optionsContainer.appendChild(label);
+
+                    // Add change handler
+                    checkbox.addEventListener('change', (e) => {
+                        if (e.target.checked) {
+                            selectedSubmarkets.add(entry.value);
+                        } else {
+                            selectedSubmarkets.delete(entry.value);
+                        }
+                        updateSelectedSubmarkets();
+                    });
+                });
+
+                // Add SUBMARKETS section
+                const submarksetsHeader = document.createElement('div');
+                submarksetsHeader.className = 'text-xs font-semibold text-gray-600 uppercase tracking-wide mt-3 mb-1 px-2';
+                submarksetsHeader.textContent = 'SUBMARKETS';
+                optionsContainer.appendChild(submarksetsHeader);
 
                 submarketNames.forEach(name => {
                     const label = document.createElement('label');
@@ -910,6 +974,19 @@
                         'line-width': 2,
                         'line-dasharray': [2, 2]
                     }
+                }, firstSymbolId);
+
+                // Add selected counties layer using the same counties-source as the overlay
+                map.addLayer({
+                    id: 'selected-counties-outline',
+                    type: 'line',
+                    source: 'counties-source',
+                    'source-layer': 'states',
+                    paint: {
+                        'line-color': '#1f2937',
+                        'line-width': 3
+                    },
+                    filter: ['in', ['get', 'GEOID'], ['literal', []]] // Start with empty filter
                 }, firstSymbolId);
             })
             .catch(error => console.error('Error loading submarkets:', error));
@@ -2228,22 +2305,50 @@
     function updateSelectedSubmarkets() {
         if (!submarketData || !map.getSource('selected-submarkets-source')) return;
 
-        // Filter features for selected submarkets
-        const selectedFeatures = submarketData.features.filter(f =>
-            selectedSubmarkets.has(f.properties.SubgeoName)
+        // Separate county selections from submarket selections
+        const selectedCountyIds = [...selectedSubmarkets].filter(id => id.startsWith('county:'));
+        const selectedSubmarketNames = [...selectedSubmarkets].filter(id => !id.startsWith('county:'));
+
+        // Filter features for selected submarkets only (not counties)
+        const selectedSubmarketFeatures = submarketData.features.filter(f =>
+            selectedSubmarketNames.includes(f.properties.SubgeoName)
         );
 
-        // Update the source
+        // Update submarkets source (submarkets only, no counties)
         map.getSource('selected-submarkets-source').setData({
             type: 'FeatureCollection',
-            features: selectedFeatures
+            features: selectedSubmarketFeatures
         });
 
-        // Zoom to selected submarkets if any
-        if (selectedFeatures.length > 0) {
-            // Calculate bounds of all selected features
+        // Update counties filter to show only selected counties
+        if (selectedCountyIds.length > 0) {
+            // Extract county names from "county:Name" format and get their GEOIDs
+            const countyNames = selectedCountyIds.map(id => id.replace('county:', ''));
+            const countyGEOIDs = countyNames.map(name => {
+                const county = COUNTIES.find(c => c.name.replace(' County', '') === name);
+                return county ? county.geoid : null;
+            }).filter(id => id !== null);
+
+            // Update the filter on selected-counties-outline layer
+            if (map.getLayer('selected-counties-outline')) {
+                console.log('Setting county filter for GEOIDs:', countyGEOIDs);
+                map.setFilter('selected-counties-outline', ['in', ['get', 'GEOID'], ['literal', countyGEOIDs]]);
+            } else {
+                console.log('selected-counties-outline layer not found!');
+            }
+        } else {
+            // No counties selected, set empty filter
+            if (map.getLayer('selected-counties-outline')) {
+                map.setFilter('selected-counties-outline', ['in', ['get', 'GEOID'], ['literal', []]]);
+            }
+        }
+
+        // Zoom to selected features if any
+        if (selectedSubmarketFeatures.length > 0 || selectedCountyIds.length > 0) {
             const bounds = new mapboxgl.LngLatBounds();
-            selectedFeatures.forEach(feature => {
+
+            // Add submarket bounds
+            selectedSubmarketFeatures.forEach(feature => {
                 if (feature.geometry.type === 'Polygon') {
                     feature.geometry.coordinates[0].forEach(coord => bounds.extend(coord));
                 } else if (feature.geometry.type === 'MultiPolygon') {
@@ -2253,10 +2358,27 @@
                 }
             });
 
-            map.fitBounds(bounds, {
-                padding: 50,
-                duration: 1000
-            });
+            // Add county bounds using predefined bounding boxes
+            if (selectedCountyIds.length > 0) {
+                const countyNames = selectedCountyIds.map(id => id.replace('county:', ''));
+                countyNames.forEach(name => {
+                    const county = COUNTIES.find(c => c.name.replace(' County', '') === name);
+                    if (county && county.bounds) {
+                        // Extend bounds with the county's predefined bounding box
+                        bounds.extend(county.bounds[0]); // southwest corner
+                        bounds.extend(county.bounds[1]); // northeast corner
+                        console.log('Added bounds for county:', name, county.bounds);
+                    }
+                });
+            }
+
+            // Fit bounds after collecting all features
+            if (!bounds.isEmpty()) {
+                map.fitBounds(bounds, {
+                    padding: 50,
+                    duration: 1000
+                });
+            }
         }
     }
 
