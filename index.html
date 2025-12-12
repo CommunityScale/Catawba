@@ -139,6 +139,7 @@
                         </optgroup>
                         <optgroup label="Personas">
                             <option value="persona-nurse">Single-earner nurse</option>
+                            <option value="persona-teacher">Single-earner teacher</option>
                         </optgroup>
                     </select>
                 </div>
@@ -172,9 +173,17 @@
 
                 <!-- Nurse persona legend -->
                 <div id="nurse-legend" class="mt-4 pb-4 hidden border-t border-gray-300 pt-4">
-                    <h3 class="font-medium mb-2 text-black">Single-earner nurse</h3>
-                    <p class="text-xs text-gray-600 mb-2">Sales: $290,500-$349,000 | Rentals: $1,475-$1,800/mo</p>
+                    <h3 class="font-medium mb-2 text-black">Where can a single-earner nurse find housing?</h3>
+                    <p class="text-xs text-gray-600 mb-2">Sales: $290,500-$349,000 <br> Rentals: $1,475-$1,800/mo</p>
                     <div id="nurse-legend-content" class="space-y-1 text-sm text-black">
+                    </div>
+                </div>
+
+                <!-- Teacher persona legend -->
+                <div id="teacher-legend" class="mt-4 pb-4 hidden border-t border-gray-300 pt-4">
+                    <h3 class="font-medium mb-2 text-black">Where can a single-earner teacher find housing?</h3>
+                    <p class="text-xs text-gray-600 mb-2">Sales: $174,500-$290,500 <br> Rentals: $900-$1,475/mo</p>
+                    <div id="teacher-legend-content" class="space-y-1 text-sm text-black">
                     </div>
                 </div>
             </div>
@@ -438,6 +447,10 @@
         'persona-nurse': {
             source: 'Recent for-sale property listings',
             description: 'Listings affordable to a single-earner nurse household, with prices between $290,500 and $349,000. Colored by number of bedrooms to help identify suitable housing options.'
+        },
+        'persona-teacher': {
+            source: 'Recent for-sale property listings',
+            description: 'Listings affordable to a single-earner teacher household, with prices between $174,500 and $290,500. Colored by number of bedrooms to help identify suitable housing options.'
         }
     };
 
@@ -1153,7 +1166,7 @@
                 type: 'circle',
                 source: 'sales-listings-source',
                 paint: {
-                    'circle-radius': 5,
+                    'circle-radius': 4,
                     'circle-color': circleColorExpression,
                     'circle-stroke-width': 1,
                     'circle-stroke-color': '#ffffff',
@@ -1334,7 +1347,7 @@
                 type: 'circle',
                 source: 'persona-nurse-source',
                 paint: {
-                    'circle-radius': 5,
+                    'circle-radius': 4,
                     'circle-color': categoryColorExpression,
                     'circle-stroke-width': 1,
                     'circle-stroke-color': '#ffffff',
@@ -1355,6 +1368,185 @@
             }, firstSymbolId);
 
             console.log('Added nurse persona layer with category-based colors');
+
+            // Create teacher persona layer (Single-earner teacher)
+            // Sales: $174,500 - $290,500, Rentals: $900 - $1,475
+
+            // Filter and categorize sales listings
+            const teacherSalesFeatures = salesListingsData
+                .filter(d => {
+                    // Check coordinates are valid
+                    if (!d.latitude || !d.longitude || isNaN(parseFloat(d.latitude)) || isNaN(parseFloat(d.longitude))) {
+                        return false;
+                    }
+                    // Check if county matches one of our counties
+                    const countyNames = COUNTIES.map(c => c.name.replace(' County', ''));
+                    if (!d.county || !countyNames.includes(d.county)) {
+                        return false;
+                    }
+                    // Filter by listing date - only show 2023, 2024, or 2025
+                    if (d.listedDate && d.listedDate !== 'NA') {
+                        try {
+                            const date = new Date(d.listedDate);
+                            const year = date.getFullYear();
+                            if (year < 2023 || year > 2025) {
+                                return false;
+                            }
+                        } catch (e) {
+                            return false;
+                        }
+                    } else {
+                        return false; // Exclude listings without a valid date
+                    }
+                    // Filter by price range - only show listings within range
+                    if (d.price && d.price !== 'NA') {
+                        const price = parseFloat(d.price);
+                        return !isNaN(price) && price >= 174500 && price <= 290500;
+                    }
+                    return false;
+                })
+                .map(d => {
+                    // Determine category based on bedrooms (all are within price range)
+                    const bedrooms = d.bedrooms && d.bedrooms !== 'NA' ? parseInt(d.bedrooms) : null;
+                    let category = 'sale-right-sized'; // Default
+
+                    if (bedrooms && bedrooms >= 3) {
+                        category = 'sale-too-large'; // 3+ bedrooms
+                    } else if (bedrooms && bedrooms >= 1 && bedrooms <= 2) {
+                        category = 'sale-right-sized'; // 1-2 bedrooms
+                    }
+
+                    return {
+                        type: 'Feature',
+                        geometry: {
+                            type: 'Point',
+                            coordinates: [parseFloat(d.longitude), parseFloat(d.latitude)]
+                        },
+                        properties: {
+                            address: d.formattedAddress || d.addressLine1,
+                            price: d.price,
+                            propertyType: d.propertyType,
+                            bedrooms: d.bedrooms,
+                            bathrooms: d.bathrooms,
+                            squareFootage: d.squareFootage,
+                            status: d.status,
+                            county: d.county,
+                            listedDate: d.listedDate,
+                            category: category,
+                            listingType: 'sale'
+                        }
+                    };
+                });
+
+            // Filter and categorize rental listings
+            const teacherRentalFeatures = rentalListingsData
+                .filter(d => {
+                    // Check coordinates are valid
+                    if (!d.latitude || !d.longitude || isNaN(parseFloat(d.latitude)) || isNaN(parseFloat(d.longitude))) {
+                        return false;
+                    }
+                    // Check if county matches one of our counties
+                    const countyNames = COUNTIES.map(c => c.name.replace(' County', ''));
+                    if (!d.county || !countyNames.includes(d.county)) {
+                        return false;
+                    }
+                    // Filter by listing date - only show 2023, 2024, or 2025
+                    if (d.listedDate && d.listedDate !== 'NA') {
+                        try {
+                            const date = new Date(d.listedDate);
+                            const year = date.getFullYear();
+                            if (year < 2023 || year > 2025) {
+                                return false;
+                            }
+                        } catch (e) {
+                            return false;
+                        }
+                    } else {
+                        return false; // Exclude listings without a valid date
+                    }
+                    // Filter by rental price range - only show rentals within range
+                    if (d.price && d.price !== 'NA') {
+                        const price = parseFloat(d.price);
+                        return !isNaN(price) && price >= 900 && price <= 1475;
+                    }
+                    return false;
+                })
+                .map(d => {
+                    // Determine category based on bedrooms (all are within price range)
+                    const bedrooms = d.bedrooms && d.bedrooms !== 'NA' ? parseInt(d.bedrooms) : null;
+                    let category = 'rental-right-sized'; // Default
+
+                    if (bedrooms && bedrooms >= 3) {
+                        category = 'rental-too-large'; // 3+ bedrooms
+                    } else if (bedrooms && bedrooms >= 1 && bedrooms <= 2) {
+                        category = 'rental-right-sized'; // 1-2 bedrooms
+                    }
+
+                    return {
+                        type: 'Feature',
+                        geometry: {
+                            type: 'Point',
+                            coordinates: [parseFloat(d.longitude), parseFloat(d.latitude)]
+                        },
+                        properties: {
+                            address: d.formattedAddress || d.addressLine1,
+                            price: d.price,
+                            propertyType: d.propertyType,
+                            bedrooms: d.bedrooms,
+                            bathrooms: d.bathrooms,
+                            squareFootage: d.squareFootage,
+                            status: d.status,
+                            county: d.county,
+                            listedDate: d.listedDate,
+                            category: category,
+                            listingType: 'rental'
+                        }
+                    };
+                });
+
+            // Combine both sales and rental features
+            const teacherFeatures = [...teacherSalesFeatures, ...teacherRentalFeatures];
+
+            console.log('Created', teacherSalesFeatures.length, 'teacher persona sales features');
+            console.log('Created', teacherRentalFeatures.length, 'teacher persona rental features');
+            console.log('Total teacher persona features:', teacherFeatures.length);
+
+            // Add source for teacher persona
+            map.addSource('persona-teacher-source', {
+                type: 'geojson',
+                data: {
+                    type: 'FeatureCollection',
+                    features: teacherFeatures
+                }
+            });
+
+            // Add layer for teacher persona
+            map.addLayer({
+                id: 'persona-teacher',
+                type: 'circle',
+                source: 'persona-teacher-source',
+                paint: {
+                    'circle-radius': 4,
+                    'circle-color': categoryColorExpression,
+                    'circle-stroke-width': 1,
+                    'circle-stroke-color': '#ffffff',
+                    'circle-opacity': 0.8
+                },
+                layout: {
+                    visibility: 'none',
+                    'circle-sort-key': [
+                        'match',
+                        ['get', 'category'],
+                        'sale-right-sized', 4,      // Draw black sales last (on top)
+                        'rental-right-sized', 3,    // Draw red rentals second
+                        'sale-too-large', 2,        // Draw grey sales third
+                        'rental-too-large', 1,      // Draw grey rentals first (below)
+                        1                           // Default
+                    ]
+                }
+            }, firstSymbolId);
+
+            console.log('Added teacher persona layer with category-based colors');
         })
         .catch(error => console.error('Error loading sales listings:', error));
 
@@ -1884,6 +2076,7 @@
             document.getElementById('sales-legend').classList.add('hidden');
             document.getElementById('rental-legend').classList.add('hidden');
             document.getElementById('nurse-legend').classList.add('hidden');
+            document.getElementById('teacher-legend').classList.add('hidden');
             currentDataLayer = null;
             currentLayerName = null; // Clear stored layer name
             // Hide tract outline when no data layer is selected
@@ -1915,6 +2108,9 @@
             }
             if (map.getLayer('persona-nurse')) {
                 map.setLayoutProperty('persona-nurse', 'visibility', 'none');
+            }
+            if (map.getLayer('persona-teacher')) {
+                map.setLayoutProperty('persona-teacher', 'visibility', 'none');
             }
             return;
         }
@@ -1950,6 +2146,7 @@
             document.getElementById('sales-legend').classList.add('hidden');
             document.getElementById('rental-legend').classList.add('hidden');
             document.getElementById('nurse-legend').classList.add('hidden');
+            document.getElementById('teacher-legend').classList.add('hidden');
 
             // Store current layer
             currentDataLayer = 'submarkets';
@@ -1997,6 +2194,9 @@
             if (map.getLayer('persona-nurse')) {
                 map.setLayoutProperty('persona-nurse', 'visibility', 'none');
             }
+            if (map.getLayer('persona-teacher')) {
+                map.setLayoutProperty('persona-teacher', 'visibility', 'none');
+            }
 
             // Show legend for sales listings
             updateSalesListingsLegend();
@@ -2004,6 +2204,7 @@
             document.getElementById('sales-legend').classList.remove('hidden');
             document.getElementById('rental-legend').classList.add('hidden');
             document.getElementById('nurse-legend').classList.add('hidden');
+            document.getElementById('teacher-legend').classList.add('hidden');
 
             // Store current layer
             currentDataLayer = 'sales-listings';
@@ -2054,6 +2255,9 @@
             if (map.getLayer('persona-nurse')) {
                 map.setLayoutProperty('persona-nurse', 'visibility', 'none');
             }
+            if (map.getLayer('persona-teacher')) {
+                map.setLayoutProperty('persona-teacher', 'visibility', 'none');
+            }
 
             // Show legend for rental listings
             updateRentalListingsLegend();
@@ -2061,6 +2265,7 @@
             document.getElementById('sales-legend').classList.add('hidden');
             document.getElementById('rental-legend').classList.remove('hidden');
             document.getElementById('nurse-legend').classList.add('hidden');
+            document.getElementById('teacher-legend').classList.add('hidden');
 
             // Store current layer
             currentDataLayer = 'rental-listings';
@@ -2111,12 +2316,16 @@
             if (map.getLayer('persona-nurse')) {
                 map.setLayoutProperty('persona-nurse', 'visibility', 'none');
             }
+            if (map.getLayer('persona-teacher')) {
+                map.setLayoutProperty('persona-teacher', 'visibility', 'none');
+            }
 
             // Hide legends
             document.getElementById('legend').classList.add('hidden');
             document.getElementById('sales-legend').classList.add('hidden');
             document.getElementById('rental-legend').classList.add('hidden');
             document.getElementById('nurse-legend').classList.add('hidden');
+            document.getElementById('teacher-legend').classList.add('hidden');
 
             // Store current layer
             currentDataLayer = 'jobs-heatmap';
@@ -2171,12 +2380,74 @@
             document.getElementById('sales-legend').classList.add('hidden');
             document.getElementById('rental-legend').classList.add('hidden');
             document.getElementById('nurse-legend').classList.remove('hidden');
+            document.getElementById('teacher-legend').classList.add('hidden');
 
             // Store current layer
             currentDataLayer = 'persona-nurse';
 
             // Update "About this layer" section
             updateAboutLayer('persona-nurse');
+
+            return;
+        }
+
+        // Handle persona-teacher layer
+        if (layerType === 'persona-teacher') {
+            // Hide tract and zip outlines
+            if (map.getLayer('tracts-outline')) {
+                map.setLayoutProperty('tracts-outline', 'visibility', 'none');
+            }
+            if (map.getLayer('zipcodes-outline')) {
+                map.setLayoutProperty('zipcodes-outline', 'visibility', 'none');
+            }
+            // Hide submarkets
+            if (map.getLayer('submarkets-fill')) {
+                map.setLayoutProperty('submarkets-fill', 'visibility', 'none');
+            }
+            if (map.getLayer('submarkets-outline')) {
+                map.setLayoutProperty('submarkets-outline', 'visibility', 'none');
+            }
+            if (map.getLayer('submarkets-labels')) {
+                map.setLayoutProperty('submarkets-labels', 'visibility', 'none');
+            }
+
+            // Show teacher persona layer
+            if (map.getLayer('persona-teacher')) {
+                map.setLayoutProperty('persona-teacher', 'visibility', 'visible');
+            }
+
+            // Ensure municipalities layer stays on top
+            if (map.getLayer('municipalities-outline')) {
+                map.moveLayer('municipalities-outline');
+            }
+
+            // Hide other layers
+            if (map.getLayer('sales-listings')) {
+                map.setLayoutProperty('sales-listings', 'visibility', 'none');
+            }
+            if (map.getLayer('rental-listings')) {
+                map.setLayoutProperty('rental-listings', 'visibility', 'none');
+            }
+            if (map.getLayer('jobs-heatmap')) {
+                map.setLayoutProperty('jobs-heatmap', 'visibility', 'none');
+            }
+            if (map.getLayer('persona-nurse')) {
+                map.setLayoutProperty('persona-nurse', 'visibility', 'none');
+            }
+
+            // Show legend for teacher persona
+            updateTeacherPersonaLegend();
+            document.getElementById('legend').classList.add('hidden');
+            document.getElementById('sales-legend').classList.add('hidden');
+            document.getElementById('rental-legend').classList.add('hidden');
+            document.getElementById('nurse-legend').classList.add('hidden');
+            document.getElementById('teacher-legend').classList.remove('hidden');
+
+            // Store current layer
+            currentDataLayer = 'persona-teacher';
+
+            // Update "About this layer" section
+            updateAboutLayer('persona-teacher');
 
             return;
         }
@@ -2209,6 +2480,9 @@
         }
         if (map.getLayer('persona-nurse')) {
             map.setLayoutProperty('persona-nurse', 'visibility', 'none');
+        }
+        if (map.getLayer('persona-teacher')) {
+            map.setLayoutProperty('persona-teacher', 'visibility', 'none');
         }
 
         // Show/hide tract outline based on layer type
@@ -2510,6 +2784,7 @@
         document.getElementById('sales-legend').classList.add('hidden');
         document.getElementById('rental-legend').classList.add('hidden');
         document.getElementById('nurse-legend').classList.add('hidden');
+        document.getElementById('teacher-legend').classList.add('hidden');
     }
 
     // Update layer description section
@@ -2595,6 +2870,35 @@
     // Update nurse persona legend
     function updateNursePersonaLegend() {
         const legendContent = document.getElementById('nurse-legend-content');
+        legendContent.innerHTML = '';
+
+        const categories = [
+            { color: '#000000', label: 'For-sale: Right-sized (1-2 bedrooms)' },
+            { color: '#dc2626', label: 'Rental: Right-sized (1-2 bedrooms)' },
+            { color: '#cccccc', label: 'Too-large (3+ bedrooms)' }
+        ];
+
+        categories.forEach(cat => {
+            const itemDiv = document.createElement('div');
+            itemDiv.className = 'flex items-center gap-2 mb-2';
+
+            const colorBox = document.createElement('div');
+            colorBox.className = 'w-4 h-4 rounded-full border border-gray-300 flex-shrink-0';
+            colorBox.style.backgroundColor = cat.color;
+
+            const label = document.createElement('span');
+            label.className = 'text-xs';
+            label.textContent = cat.label;
+
+            itemDiv.appendChild(colorBox);
+            itemDiv.appendChild(label);
+            legendContent.appendChild(itemDiv);
+        });
+    }
+
+    // Update teacher persona legend
+    function updateTeacherPersonaLegend() {
+        const legendContent = document.getElementById('teacher-legend-content');
         legendContent.innerHTML = '';
 
         const categories = [
@@ -3303,7 +3607,7 @@
             updateDataLayer(null, null);
             // Reset to "Select data layer"
             layerSelect.value = '';
-        } else if (selectedValue === 'submarkets' || selectedValue === 'sales-listings' || selectedValue === 'rental-listings' || selectedValue === 'jobs-heatmap' || selectedValue === 'persona-nurse') {
+        } else if (selectedValue === 'submarkets' || selectedValue === 'sales-listings' || selectedValue === 'rental-listings' || selectedValue === 'jobs-heatmap' || selectedValue === 'persona-nurse' || selectedValue === 'persona-teacher') {
             // Handle non-quantile layers (no attribute split needed)
             const selectedOption = e.target.options[e.target.selectedIndex];
             currentLayerName = selectedOption.text;
@@ -3703,6 +4007,56 @@
     });
 
     map.on('mouseleave', 'persona-nurse', function() {
+        map.getCanvas().style.cursor = '';
+    });
+
+    // Add click handler for teacher persona
+    map.on('click', 'persona-teacher', function(e) {
+        const props = e.features[0].properties;
+        const isRental = props.listingType === 'rental';
+        const priceFormatted = props.price && props.price !== 'NA' ? '$' + parseInt(props.price).toLocaleString() : 'N/A';
+        const bedroomsText = props.bedrooms && props.bedrooms !== 'NA' ? props.bedrooms : 'N/A';
+        const bathroomsText = props.bathrooms && props.bathrooms !== 'NA' ? props.bathrooms : 'N/A';
+        const sqftText = props.squareFootage && props.squareFootage !== 'NA' ? parseInt(props.squareFootage).toLocaleString() + ' sq ft' : 'N/A';
+
+        // Format listed date
+        let listedDateText = 'N/A';
+        if (props.listedDate && props.listedDate !== 'NA') {
+            try {
+                const date = new Date(props.listedDate);
+                if (!isNaN(date.getTime())) {
+                    listedDateText = date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+                }
+            } catch (e) {
+                listedDateText = 'N/A';
+            }
+        }
+
+        const headerText = isRental ? 'Teacher persona: Rental listing' : 'Teacher persona: For-sale listing';
+        const priceLabel = isRental ? 'Monthly rent:' : 'Price:';
+
+        new mapboxgl.Popup()
+            .setLngLat(e.lngLat)
+            .setHTML(`
+                <div class="popup-content">
+                    <div class="popup-header">${headerText}</div>
+                    <p><strong>Address:</strong> ${props.address || 'N/A'}</p>
+                    <p><strong>${priceLabel}</strong> ${priceFormatted}</p>
+                    <p><strong>Listed:</strong> ${listedDateText}</p>
+                    <p><strong>Type:</strong> ${props.propertyType || 'N/A'}</p>
+                    <p><strong>Bedrooms:</strong> ${bedroomsText}</p>
+                    <p><strong>Bathrooms:</strong> ${bathroomsText}</p>
+                    <p><strong>Size:</strong> ${sqftText}</p>
+                </div>
+            `)
+            .addTo(map);
+    });
+
+    map.on('mouseenter', 'persona-teacher', function() {
+        map.getCanvas().style.cursor = 'pointer';
+    });
+
+    map.on('mouseleave', 'persona-teacher', function() {
         map.getCanvas().style.cursor = '';
     });
 
